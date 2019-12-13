@@ -56,3 +56,10 @@ c_function_name "Yo! From hellshell to C"
 echo "Long time only first run"
 
 ```
+### TESTED
+
+- Ubuntu
+- CentOS
+- macOS
+- FreeBSD
+- OpenBSD
