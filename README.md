@@ -18,7 +18,7 @@ USAGE: hellshell [command] or [FILE]
 Or define hellshell in the first line of the script: #!/usr/bin/env hellshell
 COMMANDS
 	create new_script_name	create example script
-	cleanup					delete cache folder
+	cleanup			delete cache folder
 ```
 
 ### EXAMPLE
