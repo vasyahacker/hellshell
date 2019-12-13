@@ -1,0 +1,158 @@
+#!/bin/sh
+[ -z "$1" ]  && { echo "run me with -h"; exit 0; }
+
+[ "$1" = "--help" -o "$1" = "-h" ]  && {
+  cat <<-EOF
+
+USAGE: hellshell [command] or [FILE]
+
+Or define hellshell in the first line of the script: #!/usr/bin/env hellshell
+
+COMMANDS
+
+	create new_script_name	create example script
+	cleanup			delete cache folder
+
+EOF
+  exit 0
+}
+
+DOT_DIR=~/.hellshell
+
+[ "$1" = "cleanup" -a -z "$2" ]  && {
+  [ ! -e $DOT_DIR ] && exit 0
+  dot_dir_size="`du -sh $DOT_DIR | { read first rest ; echo $first ; }`"
+  rm -rf $DOT_DIR && echo "$dot_dir_size was freed"
+  exit 0
+}
+
+[ "$1" = "create" -a ! -z "$2" ]  && {
+  [ -e "$2" ] && { echo "$2 already exist"; exit 1; }
+  cat << EOT > $2
+#!/usr/bin/env hellshell
+#SHELL sh <-- can be any shell like bash or zsh
+echo "Example 1:"
+
+#CSTART
+// This C code block will be run here
+#include <stdio.h>
+
+int main()
+{
+  printf("Hello from C\n");
+  return 0;
+}
+
+#CEND
+
+echo "Example 2:"
+
+#CFSTART c_function_name
+// This C code will be run when c_function_name is called in a script
+#include <stdio.h>
+
+int main(int argc, char *argv[])
+{
+  if(argc == 2) printf("%s\n", argv[1]);
+  return 0;
+}
+
+#CFEND
+
+c_function_name "Yo! From hellshell to C"
+
+echo "Long time only first run"
+EOT
+  chmod +x $2
+  echo "$2 created"
+  exit 0
+}
+
+[ ! -e $1 ] && { echo "Can't see the script"; exit 1; }
+
+DEPS=""
+for r in "$MD5" "sed" "clang"
+do
+  type $r >/dev/null 2>&1 || {  DEPS="$DEPS $r"; }
+done
+[ -n "$DEPS" ] && { printf >&2 "Please install this: $DEPS\n"; exit 1; }
+
+PLATFORM="`uname`"
+MD5="md5"
+md5_opts=''
+
+[ "$PLATFORM" = "Linux" ] && { MD5='md5sum'; md5_opts='--'; }
+
+SCRIPT_PATH="$( cd "$(dirname "$1")" ; pwd -P )"
+SCRIPT_NAME="`basename "$1"`"
+SCRIPT_FULL_NAME=$SCRIPT_PATH/$SCRIPT_NAME
+SCRIPT_ID="`echo "$SCRIPT_FULL_NAME" | $MD5 $md5_opts | cut -d' ' -f1`"
+SCRIPT_MD5="`$MD5 $md5_opts < $SCRIPT_FULL_NAME | cut -d' ' -f1`"
+CACHE_DIR=~/.hellshell/$SCRIPT_NAME@$SCRIPT_ID
+SCRIPT_COMPLETE=$CACHE_DIR/$SCRIPT_MD5
+
+SCRIPT="`cat $SCRIPT_FULL_NAME`"
+
+SCRIPT_SHELL="`grep -m1 '^#SHELL' $SCRIPT_FULL_NAME | cut -d' ' -f2`"
+SCRIPT_SHELL_FULL_PATH="`type $SCRIPT_SHELL 2>/dev/null | grep -oE '[^ ]+$'`"
+[ -z "$SCRIPT_SHELL" -o -z "$SCRIPT_SHELL_FULL_PATH" ] && SCRIPT_SHELL_FULL_PATH="/bin/sh"
+
+PATH="$CACHE_DIR:$PATH"
+
+SCRIPT_OPTS="`echo "$@" | cut -d' ' -f2- `"
+[ -z "$2" ] && SCRIPT_OPTS=""
+
+[ -e $SCRIPT_COMPLETE ] && {
+  $SCRIPT_SHELL_FULL_PATH $SCRIPT_COMPLETE $SCRIPT_OPTS && exit 0 || exit 1
+} || rm -rf $CACHE_DIR
+
+CSTART_COUNT=`grep -c '^#CSTART' $SCRIPT_FULL_NAME`
+CEND_COUNT=`grep -c '^#CEND' $SCRIPT_FULL_NAME`
+CFSTART_COUNT=`grep -c '^#CFSTART' $SCRIPT_FULL_NAME`
+CFEND_COUNT=`grep -c '^#CFEND' $SCRIPT_FULL_NAME`
+ERR_CNT_MESS="Error: one or more unnecessary"
+[ $CSTART_COUNT -gt $CEND_COUNT ]   && { echo "$ERR_CNT_MESS #CSTART";  exit 1; }
+[ $CSTART_COUNT -lt $CEND_COUNT ]   && { echo "$ERR_CNT_MESS #CEND";    exit 1; }
+[ $CFSTART_COUNT -gt $CFEND_COUNT ] && { echo "$ERR_CNT_MESS #CFSTART"; exit 1; }
+[ $CFSTART_COUNT -lt $CFEND_COUNT ] && { echo "$ERR_CNT_MESS #CFEND";   exit 1; }
+
+mkdir -p $CACHE_DIR
+
+c_index=0
+while true
+do
+  c_code="`printf "%s" "$SCRIPT" | sed -n '/^#CSTART/,/^#CEND/{p; /^#CEND/q;}' | sed '/^#CSTART/d;/^#CEND/d'`"
+  cf_code="`printf "%s" "$SCRIPT" | sed -n '/^#CFSTART/,/^#CFEND/{p; /^#CFEND/q;}' | sed '/^#CFSTART/d;/^#CFEND/d'`"
+
+  [ -z "$c_code" ] && [ -z "$cf_code" ] && break
+  
+  [ ! -z "$c_code" ] && {
+    c_blk_name="C_BLOCK_$c_index"
+    c_file="$CACHE_DIR/$c_blk_name.c"
+    printf "%s" "$c_code" > $c_file
+    bin_file="$CACHE_DIR/$c_blk_name.bin"
+    [ "$PLATFORM" = "Linux" ] && {
+      SCRIPT="`printf "%s" "$SCRIPT" | sed -e '/^#CSTART/{:a' -e 'N;/#CEND/!ba' -e "N;s%.*\n%$bin_file\n%" -e ':b' -e '$!n;$!bb' -e '}'`"
+      true
+    } || SCRIPT="`printf "%s" "$SCRIPT" | sed -e '/^#CSTART/{:a' -e 'N;/#CEND/!ba' -e "N;s%.*\n%$bin_file"'\'$'\n%' -e ':b' -e '$!n;$!bb' -e '}'`"
+    clang -O3 $c_file -o $bin_file
+  }
+  
+  [ ! -z "$cf_code" ] && { 
+    c_func_name="`printf "%s" "$SCRIPT" | grep -m1 '^#CFSTART ' | cut -d' ' -f2`"
+    c_file=$CACHE_DIR/$c_func_name.c
+    bin_file=$CACHE_DIR/$c_func_name
+    printf "%s" "$cf_code" > $c_file
+    SCRIPT="`printf "%s\n" "$SCRIPT" | sed -e '/^#CFSTART/{:a' -e 'N;/#CFEND/!ba' -e 'N;s%.*\n%%' -e ':b' -e '$!n;$!bb' -e '}'`"
+    clang -O3 $c_file -o $bin_file
+  }
+  c_index=$((c_index+1))
+done
+
+printf "%s" "$SCRIPT" > $SCRIPT_COMPLETE
+printf "\nexit 0" >> $SCRIPT_COMPLETE
+
+rm -f $CACHE_DIR/*.c
+
+$SCRIPT_SHELL_FULL_PATH $SCRIPT_COMPLETE $SCRIPT_OPTS
+
